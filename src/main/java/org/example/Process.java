@@ -61,19 +61,16 @@ public class Process {
                 String publicKey = jsonObject.getString(PUBLICKEY);
                 processMessage.onHandshake(senderId, receiverId, publicKey);
             }
-            case AVATAR, AVATAR_ORG, GET_AVATAR, KEY_EXCHANGE -> {
-                processMessage.sendMessage(receiverId, jsonMessage);
-            }
+            case AVATAR, AVATAR_ORG, GET_AVATAR, KEY_EXCHANGE -> processMessage.sendMessage(receiverId, jsonMessage);
             case MESSAGE_STATUS -> {
                 String messageStatus = messageData.get(MESSAGE_STATUS);
 
                 if (DELIVERED.equals(messageStatus)) {
                     processMessage.deleteSaveMessages(senderId, messageId);
                     processMessage.setMessageStatus(senderId + ":" + messageId, DELIVERED);
-
                 } else if (DELIVERED_TO_USER.equals(messageStatus)) {
-                    //logger.info(LogMessage.MESSAGE_DELIVERED.getMessage(), messageId);
-                    processMessage.sendMessage(receiverId, messageStatus(senderId, receiverId, messageId, "received"));
+                    String received_message = messageStatus(senderId, receiverId, messageId, "received");
+                    processMessage.sendMessage(receiverId, received_message);
                 }
             }
         }
@@ -90,15 +87,20 @@ public class Process {
             try {
                 session.sendMessage(new TextMessage(message));
             } catch (IOException e) {
-                logger.error("Помилка при відправці повідомлення: {}", e.getMessage());
+                logger.error(LogMessage.ERROR_SENDING_MESSAGE.getMessage(), e.getMessage());
             }
         } else {
-            logger.error("Спроба відправити повідомлення, але сесія закрита або не існує.");
+            logger.error("Attempting to send a message, but the session is closed or does not exist.");
         }
     }
 
     /**
      * Формуємо статусне повідомлення.
+     *
+     * @param senderId   Id відправник
+     * @param receiverId Id отримувачь
+     * @param messageId  Id повідомлення
+     * @param status     статус повідомлення
      */
     private String messageStatus(String senderId, String receiverId, String messageId, String status) {
         Envelope envelope = new Envelope(senderId, receiverId, "messageStatus", "", messageId);
@@ -108,14 +110,15 @@ public class Process {
 
 
     public interface ProcessMessage {
-        void onHandshake(String senderId, String receiverId, String publicKey);
-
 
         void sendMessage(String receiverId, String jsonMessage);
 
+        void setMessageStatus(String messageId, String messageStatus);
+
         void deleteSaveMessages(String userId, String messageId);
 
-        void setMessageStatus(String messageId, String messageStatus);
+        void onHandshake(String senderId, String receiverId, String publicKey);
+
     }
 }
 

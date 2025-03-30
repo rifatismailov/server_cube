@@ -22,12 +22,13 @@ public class MessageWebSocketHandler extends TextWebSocketHandler implements Pro
     private static final String CHECK_STATUS = "CHECK_STATUS:";
     private static final String REGISTER_FAILED = "REGISTER_FAILED";
 
-    private final ConcurrentHashMap<String, WebSocketSession> clients;
-    private final ConcurrentHashMap<String, List<String>> saveMessages;
-    private final ConcurrentHashMap<String, String> clientStatus;
-    private final ConcurrentHashMap<String, String> messageStatusInfo = new ConcurrentHashMap<>();
+    private final Map<String, WebSocketSession> clients;
+    private final Map<String, List<String>> saveMessages;
+    private final Map<String, String> clientStatus;
+    private final Map<String, String> messageStatusInfo = new ConcurrentHashMap<>();
+    private final Map<String, Long> lastPingTime = new ConcurrentHashMap<>();
 
-    public MessageWebSocketHandler(ConcurrentHashMap<String, WebSocketSession> clients, ConcurrentHashMap<String, List<String>> saveMessages, ConcurrentHashMap<String, String> clientStatus) {
+    public MessageWebSocketHandler(Map<String, WebSocketSession> clients, Map<String, List<String>> saveMessages, Map<String, String> clientStatus) {
         this.clients = clients;
         this.saveMessages = saveMessages;
         this.clientStatus = clientStatus;
@@ -65,9 +66,13 @@ public class MessageWebSocketHandler extends TextWebSocketHandler implements Pro
             if (userId != null) {
                 clients.putIfAbsent(userId, session);
                 clientStatus.put(userId, life);
+                lastPingTime.put(userId, System.currentTimeMillis());
                 session.sendMessage(new TextMessage(REGISTER_OK + ":" + getContactStatus(contacts)));
+                logger.info(LogMessage.CHECK_CONTACTS.getMessage(), getContactStatus(contacts));
+
                 sendSavedMessages(userId);
             }
+
         } else {
             //logger.info("Processing message: {}", payload);
             new Process(this).processMessage(session, payload);
@@ -76,22 +81,76 @@ public class MessageWebSocketHandler extends TextWebSocketHandler implements Pro
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-        clients.values().removeIf(s -> s.getId().equals(session.getId()));
-        logger.info(LogMessage.CONNECT_CLOSED.getMessage(), session.getId());
+        String clientId = getClientId(session);
+
+        if (clientId != null) {
+            lastPingTime.remove(clientId);
+            clients.remove(clientId); // Правильне видалення клієнта
+            logger.info(LogMessage.CONNECT_CLOSED.getMessage(), clientId);
+        } else {
+            logger.warn("Unknown session {} disconnected", session.getId());
+        }
     }
 
+    private String getClientId(WebSocketSession session) {
+        return clients.entrySet()
+                .stream()
+                .filter(entry -> entry.getValue().equals(session))
+                .map(Map.Entry::getKey)
+                .findFirst()
+                .orElse(null);
+    }
+
+
+    /**
+     * Перевіряє статус підключення контактів у WebSocket-сесії.
+     *
+     * Метод отримує JSON-масив із списком ідентифікаторів клієнтів,
+     * перевіряє їхню активність у WebSocket-з'єднанні та визначає їхній статус.
+     *
+     * @param contacts JSON-рядок, що містить масив ідентифікаторів клієнтів.
+     * @return JSON-рядок, що містить список контактів і їхній статус ("online" або "disconnect").
+     */
     private String getContactStatus(String contacts) {
+        // Перетворюємо вхідний JSON-рядок у масив JSON
         JSONArray jsonArray = new JSONArray(contacts);
         List<String> resultList = new ArrayList<>();
+        long currentTime = System.currentTimeMillis(); // Отримуємо поточний час у мілісекундах
 
+        // Перебираємо кожен ідентифікатор у JSON-масиві
         for (int i = 0; i < jsonArray.length(); i++) {
             String id = jsonArray.getString(i);
-            String status = clientStatus.getOrDefault(id, "unknown");
-            resultList.add(id + "=" + status);
+            WebSocketSession recipient = clients.get(id); // Отримуємо сесію клієнта
+
+            // Перевіряємо, чи клієнт підключений та чи сесія активна
+            if (recipient != null && recipient.isOpen()) {
+
+                for (Map.Entry<String, Long> entry : lastPingTime.entrySet()) {
+                    String clientId = entry.getKey();
+                    long lastSeen = entry.getValue();
+
+                    // Перевіряємо, чи останній пінг клієнта був більше ніж 6 секунд тому
+                    if ((currentTime - lastSeen) > 6000) {
+                        logger.warn(LogMessage.CONNECT_CLOSED.getMessage(), clientId);
+                        lastPingTime.remove(clientId); // Видаляємо клієнта з останніх пінгів
+                        clients.remove(clientId); // Видаляємо клієнта зі списку сесій
+                        resultList.add(id + "=" + "disconnect");
+                    } else {
+                        // Отримуємо статус клієнта або встановлюємо "disconnect" за замовчуванням
+                        String status = clientStatus.getOrDefault(id, "disconnect");
+                        resultList.add(id + "=" + status);
+                    }
+                }
+            } else {
+                // Якщо клієнт не знайдений або з'єднання закрите, вказуємо "disconnect"
+                resultList.add(id + "=" + "disconnect");
+            }
         }
 
+        // Повертаємо результат у вигляді JSON-масиву
         return new JSONArray(resultList).toString();
     }
+
 
 
     private final ExecutorService executor = Executors.newFixedThreadPool(10); // Потоки для швидкої обробки
@@ -133,7 +192,6 @@ public class MessageWebSocketHandler extends TextWebSocketHandler implements Pro
             }
         });
     }
-
 
 
     /**
