@@ -16,10 +16,10 @@ public class WebSocketConfig implements WebSocketConfigurer {
     private final Map<String, WebSocketSession> clients = new ConcurrentHashMap<>();
     private final Map<String, List<String>> saveMessages = new ConcurrentHashMap<>();
     private final Map<String, String> clientStatus = new ConcurrentHashMap<>();
-
+    private final Map<String, String> clientsKey= new ConcurrentHashMap<>();
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-        registry.addHandler(new MessageWebSocketHandler(clients, saveMessages, clientStatus), "/ws").setAllowedOrigins("*");
+        registry.addHandler(new MessageWebSocketHandler(clients, saveMessages, clientStatus,clientsKey), "/ws").setAllowedOrigins("*");
     }
 }
 

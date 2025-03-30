@@ -14,7 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class MessageWebSocketHandler extends TextWebSocketHandler implements Process.ProcessMessage {
+public class MessageWebSocketHandler extends TextWebSocketHandler implements Process.ProcessMessage, HandshakeKeyGen.HandshakeListener {
 
     private static final Logger logger = LoggerFactory.getLogger(MessageWebSocketHandler.class);
     private static final String REGISTER = "REGISTER:";
@@ -25,20 +25,37 @@ public class MessageWebSocketHandler extends TextWebSocketHandler implements Pro
     private final Map<String, WebSocketSession> clients;
     private final Map<String, List<String>> saveMessages;
     private final Map<String, String> clientStatus;
+    private final Map<String, String> clientsKey;
+
     private final Map<String, String> messageStatusInfo = new ConcurrentHashMap<>();
     private final Map<String, Long> lastPingTime = new ConcurrentHashMap<>();
 
-    public MessageWebSocketHandler(Map<String, WebSocketSession> clients, Map<String, List<String>> saveMessages, Map<String, String> clientStatus) {
+    public MessageWebSocketHandler(Map<String, WebSocketSession> clients, Map<String, List<String>> saveMessages, Map<String, String> clientStatus, Map<String, String> clientsKey) {
         this.clients = clients;
         this.saveMessages = saveMessages;
         this.clientStatus = clientStatus;
+        this.clientsKey = clientsKey;
     }
 
+    /**
+     * Викликається після встановлення WebSocket-з'єднання з клієнтом.
+     * Логує нове підключення.
+     *
+     * @param session WebSocket-сесія клієнта
+     */
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
         logger.info(LogMessage.NEW_CONNECT.getMessage(), session.getId());
     }
 
+    /**
+     * Обробляє вхідні текстові повідомлення від клієнтів.
+     * Визначає тип повідомлення (реєстрація, перевірка статусу чи інше) і відповідним чином реагує.
+     *
+     * @param session WebSocket-сесія клієнта
+     * @param message Вхідне повідомлення від клієнта
+     * @throws IOException Якщо виникає помилка при надсиланні відповіді
+     */
     @Override
     protected void handleTextMessage(WebSocketSession session, @NotNull TextMessage message) throws IOException {
         String payload = message.getPayload();
@@ -49,11 +66,13 @@ public class MessageWebSocketHandler extends TextWebSocketHandler implements Pro
             String life = json.optString("life", "unknown");
             String contacts = json.optString("contacts", "[]");
 
+            // Перевіряємо, чи користувач вже зареєстрований
             if (userId == null || clients.containsKey(userId)) {
                 session.sendMessage(new TextMessage(REGISTER_FAILED));
                 return;
             }
 
+            // Додаємо користувача до списку підключених клієнтів
             clients.put(userId, session);
             clientStatus.put(userId, life);
             session.sendMessage(new TextMessage(REGISTER_OK + ":" + getContactStatus(contacts)));
@@ -70,28 +89,42 @@ public class MessageWebSocketHandler extends TextWebSocketHandler implements Pro
                 session.sendMessage(new TextMessage(REGISTER_OK + ":" + getContactStatus(contacts)));
                 logger.info(LogMessage.CHECK_CONTACTS.getMessage(), getContactStatus(contacts));
 
+                // Відправляємо клієнту збережені повідомлення
                 sendSavedMessages(userId);
             }
-
         } else {
-            //logger.info("Processing message: {}", payload);
+            // Обробка інших типів повідомлень
             new Process(this).processMessage(session, payload);
         }
     }
 
+
+    /**
+     * Викликається після закриття WebSocket-з'єднання.
+     * Видаляє клієнта зі списку активних сесій та очищає дані про останній пінг.
+     *
+     * @param session WebSocket-сесія, яка була закрита.
+     * @param status  Статус закриття з'єднання.
+     */
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         String clientId = getClientId(session);
 
         if (clientId != null) {
-            lastPingTime.remove(clientId);
-            clients.remove(clientId); // Правильне видалення клієнта
+            lastPingTime.remove(clientId); // Видаляємо інформацію про останній пінг клієнта
+            clients.remove(clientId); // Видаляємо клієнта зі списку активних сесій
             logger.info(LogMessage.CONNECT_CLOSED.getMessage(), clientId);
         } else {
             logger.warn("Unknown session {} disconnected", session.getId());
         }
     }
 
+    /**
+     * Отримує унікальний ідентифікатор клієнта за його WebSocket-сесією.
+     *
+     * @param session WebSocket-сесія клієнта.
+     * @return Ідентифікатор клієнта або null, якщо клієнт не знайдений.
+     */
     private String getClientId(WebSocketSession session) {
         return clients.entrySet()
                 .stream()
@@ -104,7 +137,7 @@ public class MessageWebSocketHandler extends TextWebSocketHandler implements Pro
 
     /**
      * Перевіряє статус підключення контактів у WebSocket-сесії.
-     *
+     * <p>
      * Метод отримує JSON-масив із списком ідентифікаторів клієнтів,
      * перевіряє їхню активність у WebSocket-з'єднанні та визначає їхній статус.
      *
@@ -152,7 +185,6 @@ public class MessageWebSocketHandler extends TextWebSocketHandler implements Pro
     }
 
 
-
     private final ExecutorService executor = Executors.newFixedThreadPool(10); // Потоки для швидкої обробки
 
     /**
@@ -191,6 +223,16 @@ public class MessageWebSocketHandler extends TextWebSocketHandler implements Pro
                 logger.error(LogMessage.ERROR_SENDING_MESSAGE.getMessage(), e.getMessage());
             }
         });
+    }
+
+    @Override
+    public Map<String, WebSocketSession> getOnlineUsers() {
+        return clients;
+    }
+
+    @Override
+    public Map<String, String> getClientsKey() {
+        return clientsKey;
     }
 
 
@@ -272,6 +314,6 @@ public class MessageWebSocketHandler extends TextWebSocketHandler implements Pro
 
     @Override
     public void onHandshake(String senderId, String receiverId, String publicKey) {
-        // new Handshake(this).handleHandshake(senderId, receiverId, publicKey);
+         new HandshakeKeyGen(this).handleHandshake(senderId, receiverId, publicKey);
     }
 }
