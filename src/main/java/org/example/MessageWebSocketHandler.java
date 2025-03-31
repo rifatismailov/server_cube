@@ -1,5 +1,7 @@
 package org.example;
 
+import org.example.process.HandshakeKeyGen;
+import org.example.process.Process;
 import org.jetbrains.annotations.NotNull;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -145,44 +147,34 @@ public class MessageWebSocketHandler extends TextWebSocketHandler implements Pro
      * @return JSON-рядок, що містить список контактів і їхній статус ("online" або "disconnect").
      */
     private String getContactStatus(String contacts) {
-        // Перетворюємо вхідний JSON-рядок у масив JSON
         JSONArray jsonArray = new JSONArray(contacts);
         List<String> resultList = new ArrayList<>();
-        long currentTime = System.currentTimeMillis(); // Отримуємо поточний час у мілісекундах
+        long currentTime = System.currentTimeMillis();
 
-        // Перебираємо кожен ідентифікатор у JSON-масиві
         for (int i = 0; i < jsonArray.length(); i++) {
             String id = jsonArray.getString(i);
-            WebSocketSession recipient = clients.get(id); // Отримуємо сесію клієнта
+            WebSocketSession recipient = clients.get(id);
 
-            // Перевіряємо, чи клієнт підключений та чи сесія активна
             if (recipient != null && recipient.isOpen()) {
+                long lastSeen = lastPingTime.getOrDefault(id, 0L);
 
-                for (Map.Entry<String, Long> entry : lastPingTime.entrySet()) {
-                    String clientId = entry.getKey();
-                    long lastSeen = entry.getValue();
-
-                    // Перевіряємо, чи останній пінг клієнта був більше ніж 6 секунд тому
-                    if ((currentTime - lastSeen) > 6000) {
-                        logger.warn(LogMessage.CONNECT_CLOSED.getMessage(), clientId);
-                        lastPingTime.remove(clientId); // Видаляємо клієнта з останніх пінгів
-                        clients.remove(clientId); // Видаляємо клієнта зі списку сесій
-                        resultList.add(id + "=" + "disconnect");
-                    } else {
-                        // Отримуємо статус клієнта або встановлюємо "disconnect" за замовчуванням
-                        String status = clientStatus.getOrDefault(id, "disconnect");
-                        resultList.add(id + "=" + status);
-                    }
+                if ((currentTime - lastSeen) > 6000) {
+                    logger.warn(LogMessage.CONNECT_CLOSED.getMessage(), id);
+                    lastPingTime.remove(id);
+                    clients.remove(id);
+                    resultList.add(id + "=disconnect");
+                } else {
+                    String status = clientStatus.getOrDefault(id, "disconnect");
+                    resultList.add(id + "=" + status);
                 }
             } else {
-                // Якщо клієнт не знайдений або з'єднання закрите, вказуємо "disconnect"
-                resultList.add(id + "=" + "disconnect");
+                resultList.add(id + "=disconnect");
             }
         }
 
-        // Повертаємо результат у вигляді JSON-масиву
         return new JSONArray(resultList).toString();
     }
+
 
 
     private final ExecutorService executor = Executors.newFixedThreadPool(10); // Потоки для швидкої обробки

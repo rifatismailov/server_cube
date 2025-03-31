@@ -1,10 +1,7 @@
-package org.example;
+package org.example.process;
 
 
 import org.json.JSONObject;
-
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 
 public class Envelope {
     private String messageId;     // Унікальний ідентифікатор повідомлення
